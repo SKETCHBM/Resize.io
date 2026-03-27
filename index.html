@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>高度画像圧縮（px/KB指定）</title>
+    <style>
+        :root { --line: #00B900; --save: #007AFF; --all: #5856D6; --bg: #F2F2F7; }
+        body { font-family: -apple-system, sans-serif; background: var(--bg); margin: 0; padding: 15px; }
+        .container { max-width: 600px; margin: 0 auto; }
+        .card { background: #FFF; padding: 20px; border-radius: 20px; box-shadow: 0 8px 20px rgba(0,0,0,0.05); margin-bottom: 15px; }
+        h2 { text-align: center; font-size: 1.1rem; margin: 0 0 15px; border-bottom: 1px solid #EEE; padding-bottom: 10px; }
+        
+        .setting-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+        .setting-group { background: #F9F9fB; padding: 12px; border-radius: 12px; border: 1px solid #E5E5EA; }
+        .label { font-size: 0.7rem; font-weight: bold; color: #3A3A3C; margin-bottom: 5px; display: block; }
+        input[type="number"], input[type="file"] { width: 100%; padding: 10px; border: 1px solid #C7C7CC; border-radius: 8px; font-size: 1rem; box-sizing: border-box; }
+
+        .all-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; display: none; }
+        .btn-all { background: var(--all); color: white; padding: 12px; border-radius: 10px; border: none; font-weight: bold; font-size: 0.85rem; cursor: pointer; }
+
+        .item-list { display: flex; flex-direction: column; gap: 10px; margin-top: 15px; }
+        .item { background: #FFF; padding: 12px; border-radius: 15px; display: flex; align-items: center; gap: 12px; border: 1px solid #EEE; position: relative; }
+        .item img { width: 55px; height: 55px; object-fit: cover; border-radius: 8px; }
+        .item-info { flex-grow: 1; min-width: 0; }
+        .item-name { font-size: 0.75rem; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .item-size { font-size: 0.7rem; color: #8E8E93; line-height: 1.4; }
+        .status-tag { display: inline-block; font-size: 0.6rem; padding: 2px 5px; border-radius: 4px; background: #E5E5EA; color: #666; margin-top: 3px; }
+        
+        .item-btns { display: flex; flex-direction: column; gap: 4px; }
+        .btn { padding: 6px 8px; color: white; border: none; border-radius: 6px; font-size: 0.7rem; font-weight: bold; cursor: pointer; text-align: center; text-decoration: none; }
+        .btn-line { background: var(--line); }
+        .btn-save { background: var(--save); }
+
+        /* 処理中オーバーレイ */
+        #loading { display: none; text-align: center; font-size: 0.8rem; color: var(--save); margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="card">
+        <h2>画像一括リサイズ & 容量制限</h2>
+        
+        <div class="setting-grid">
+            <div class="setting-group">
+                <span class="label">最大横幅 (px)</span>
+                <input type="number" id="maxWidth" value="1200" oninput="handleFiles()">
+            </div>
+            <div class="setting-group">
+                <span class="label">目標サイズ (KB)</span>
+                <input type="number" id="maxKB" value="300" oninput="handleFiles()">
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <span class="label">画像を選択 (複数可)</span>
+            <input type="file" id="upload" accept="image/*" multiple onchange="handleFiles()">
+        </div>
+
+        <div id="loading">処理中...</div>
+
+        <div id="allActions" class="all-actions">
+            <button class="btn-all" onclick="shareAll()">一括共有</button>
+            <button class="btn-all" onclick="saveAll()">一括保存</button>
+        </div>
+    </div>
+
+    <div id="imageList" class="item-list"></div>
+</div>
+
+<script>
+let processedFiles = [];
+
+async function handleFiles() {
+    const fileInput = document.getElementById('upload');
+    const maxWidth = parseInt(document.getElementById('maxWidth').value) || 1200;
+    const maxKB = parseInt(document.getElementById('maxKB').value) || 300;
+    const imageList = document.getElementById('imageList');
+    const allActions = document.getElementById('allActions');
+    const loading = document.getElementById('loading');
+    
+    const files = Array.from(fileInput.files);
+    if (files.length === 0) return;
+
+    // リセット
+    imageList.innerHTML = "";
+    processedFiles = [];
+    allActions.style.display = "none";
+    loading.style.display = "block";
+
+    for (const file of files) {
+        await processFile(file, maxWidth, maxKB);
+    }
+    
+    loading.style.display = "none";
+    if (processedFiles.length > 0) {
+        allActions.style.display = "grid";
+    }
+}
+
+async function processFile(file, maxWidth, maxKB) {
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.src = e.target.result;
+            img.onload = async () => {
+                let width = img.width;
+                let height = img.height;
+                if (width > maxWidth) {
+                    height = Math.round((height * maxWidth) / width);
+                    width = maxWidth;
+                }
+
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+
+                // --- 容量制限のための再帰的圧縮 ---
+                let quality = 0.9;
+                let blob;
+                const targetBytes = maxKB * 1024;
+
+                // 最小画質0.1まで、目標サイズを下回るまで繰り返す
+                for (let i = 0; i < 7; i++) { 
+                    blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality));
+                    if (blob.size <= targetBytes || quality <= 0.2) break;
+                    quality -= 0.15; // 画質を下げて再試行
+                }
+
+                const url = URL.createObjectURL(blob);
+                const fileObj = {
+                    name: `min_${file.name.split('.')[0]}.jpg`,
+                    blob: blob,
+                    url: url,
+                    width: width,
+                    height: height,
+                    quality: Math.round(quality * 100)
+                };
+                processedFiles.push(fileObj);
+                addItemToUI(fileObj);
+                resolve();
+            };
+        };
+        reader.readAsDataURL(file);
+    });
+}
+
+function addItemToUI(fileObj) {
+    const container = document.getElementById('imageList');
+    const kb = Math.round(fileObj.blob.size / 1024);
+    
+    const item = document.createElement('div');
+    item.className = 'item';
+    item.innerHTML = `
+        <img src="${fileObj.url}">
+        <div class="item-info">
+            <div class="item-name">${fileObj.name}</div>
+            <div class="item-size">${fileObj.width}x${fileObj.height} / <strong>${kb}KB</strong></div>
+            <div class="status-tag">画質:${fileObj.quality}%</div>
+        </div>
+        <div class="item-btns">
+            <button class="btn btn-line" onclick="shareSingle('${fileObj.name}', '${fileObj.url}')">共有</button>
+            <a href="${fileObj.url}" download="${fileObj.name}" class="btn btn-save">保存</a>
+        </div>
+    `;
+    container.appendChild(item);
+}
+
+// 共有・保存の共通処理（前回同様）
+async function shareSingle(name, url) {
+    const response = await fetch(url);
+    const blob = await response.blob();
+    const file = new File([blob], name, { type: "image/jpeg" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file] });
+    }
+}
+
+async function shareAll() {
+    const filesToShare = processedFiles.map(f => new File([f.blob], f.name, { type: "image/jpeg" }));
+    if (navigator.canShare && navigator.canShare({ files: filesToShare })) {
+        await navigator.share({ files: filesToShare });
+    }
+}
+
+function saveAll() {
+    processedFiles.forEach((f, index) => {
+        setTimeout(() => {
+            const a = document.createElement('a');
+            a.href = f.url;
+            a.download = f.name;
+            a.click();
+        }, index * 400);
+    });
+}
+</script>
+
+</body>
+</html>
